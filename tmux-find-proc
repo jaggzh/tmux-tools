@@ -1,0 +1,107 @@
+#!/bin/bash
+# Find process running in a tmux session somewhere
+# . ansi.sh # Defines colors, but they're here now:
+rst=$'\033[m'
+yel=$'\033[33;1m'
+bmag=$'\033[35;1m'
+whi=$'\033[37;1m'
+cya=$'\033[36m'
+
+usage() {
+    echo "Usage: $0 [-p pid] [program name substring]"
+    echo "       $0 -f 'substring of anywhere in the command line'"
+    echo "Options:"
+    echo "  -p  Search by process ID (instead of name)."
+    echo "  -f  Search by a substring that appears anywhere in the command line, similar to pgrep -f."
+    echo "  -h, --help  Show this help message and exit."
+}
+
+if [[ "$#" -eq 0 ]] || [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+    usage
+    exit 0
+fi
+
+# Initialize variables
+search_by_pid=false
+search_by_full=false
+query=""
+script_pid=$$
+
+# Parse options
+while getopts ":p:f:" opt; do
+    case ${opt} in
+        p )
+            search_by_pid=true
+            query=$OPTARG
+            ;;
+        f )
+            search_by_full=true
+            query=$OPTARG
+            ;;
+        \? )
+            echo "Invalid option: $OPTARG" 1>&2
+            usage
+            exit 1
+            ;;
+        : )
+            echo "Invalid option: $OPTARG requires an argument" 1>&2
+            usage
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND -1))
+
+# Non-option argument as program name substring
+if [[ -z "$query" ]] && [[ -n "$1" ]]; then
+    query=$1
+fi
+
+# Include PID in the output to filter it out
+ps_command_output_fields="pid,tty,cmd"
+
+echo "Our PID: $script_pid"
+
+# Construct the process search command
+if [[ "$search_by_pid" = true ]]; then
+    proc_info=$(ps -p $query -o $ps_command_output_fields= |
+    	grep -vE "^ *($script_pid|$BASHPID) ")
+elif [[ "$search_by_full" = true ]]; then
+	proc_info=$(ps ax -o $ps_command_output_fields= |
+		grep -ie "$query" |
+		grep -v grep |
+		grep -vE "^ *($script_pid|$BASHPID) ")
+else
+	proc_info=$(sspid=$BASHPID;
+		ps ax -o $ps_command_output_fields |
+			grep -ie "$query" |
+			grep -v grep |
+			grep -vE "^ *($script_pid|$sspid) ")
+    # printf "%s\n" "$proc_info"
+    # exit
+fi
+
+if [[ -z "$proc_info" ]]; then
+    echo "No process found matching the query."
+    exit 1
+fi
+
+# ps auxwf | grep --color=auto -i -A1 -B1 tmux-find-proc
+echo "${whi}Found process:$rst"
+echo "$proc_info" | while read line; do
+	echo " LINE: $line"
+    tty=$(echo $line | awk '{print $2}')
+    cmd=$(echo $line | cut -d' ' -f3-)
+    echo "  TTY: $tty"
+    echo "  Full command line: $yel$cmd$rst"
+
+	tmux list-panes -a -F $'#{session_name}\t#{window_name}\t#{pane_index}\t#{pane_tty}' |
+	grep -- "$tty\$" |
+	while IFS=$'\t' read -r session window pane tty_path; do
+	    echo -n "  ${whi}Tmux session$rst:${bmag}window$rst:${yel}pane#$rst:${cya}tty$rst: "
+	    echo "${whi}${session}$rst:${bmag}${window}$rst:${yel}${pane}$rst:${cya}${tty_path}$rst"
+	done
+done
+
+
+exit 0
